@@ -1,43 +1,38 @@
 #### Code Overview ####
 
-## Viral Loads
+## Viremia plotting and stats analysis
 # Authors: Chelsea Crooks & Hunter Ries & Luis Haddock
 
 ## Overview
 # - csv file downloaded from ZEST open research portal
-# - clean csv data 
-# - Save cleaned dataframes as CSV files
+# - Clean data and save cleaned dataframes as CSV files
 # - Plot the dataframes as line plots 
-# - X: DPI
-# - Y: viral load (copies DENV-3 vRNA/mL plasma)  
-
-## Reference 
-# Animal IDs: 
-# - Cohort 1 (flavi-naive): 043-101, 043-102, 043-103, 043-104, 043-105, 043-106, 043-107, 043-108
-# - Cohort 2 (ZIKV-exposed): 044-109, 034-102, 046-101, 044-110, 044-114, 036-102, 044-116, 044-118, 046-103, 044-103, 044-104, 046-104, 035-110, 035-109
-# - Cohort 3 (DENV-2/ZIKV-exposed): 042-101, 042-102, 042-104, 042-106, 042-107
-# Study on ZEST Open Research portal: ZIKV-043 (https://openresearch.labkey.com/project/ZEST/OConnor/ZIKV-043/begin.view?)
-
-
-## Challenge data
-# - DENV-3 Isolate: Dengue virus/H. sapiens-tc/NIC/DENV3-6629
-# - DENV-3 Sequence: SRA link to come
-# - Challenge dose: 10^4 PFU
-# - Challenge route: Subcutaneous
-# - Days viral loads performed: 0-10, 15 days post-infection
-
+# - Calculate viremia statistics (AUC, peak, duration, time to peak) and save data 
+# - Plot viremia statistics and save plots
+# - Save p-values from viremia statistics
 
 ## Input: 
 # 1. Raw viral load data from ZIKV portal (see "README-viral-load-raw-data-search-parameters.txt"): 
-#   - https://openresearch.labkey.com/ > ZEST > Private > Viral loads in EHR > select Animal IDs above + DENV-3 assay
-# - `C*-VL-raw.csv`
-
+  # - https://openresearch.labkey.com/ > ZEST > Private > Viral loads in EHR > select Animal IDs
+  # - `C*-VL-raw.csv`
+# 2. Study-specific data 
+  # - csv file with the animal, hexcode color, and challenge date
+  
 ## Output: 
 # 1. CSV files with all viral loads:       
-#   - `C*-[virus]-VL-clean.csv`
-
-# 2. Figures showing viral loads over time:   
-#   - ``
+  # - `C*-[virus]-VL-clean.csv`
+# 2. CSV files with the viremia parameters (AUC, peak, time to peak, duration)
+  # - `[virus]-viremia-stats-all.csv` [parameter values for each animal]
+  # - `[virus]-viremia-stats-sumary.csv` [mean values for each cohort]
+  # - `[virus]-master-viremia-stats-all.csv` [specific format that I wannt data in to copy and paste into a shared spreadsheet]
+  # - `[virus]-VL-stat-significance.csv`
+# 3. Figures showing viral loads over time:   
+  # - `C*-[virus]-VL.png`
+# 4. Figures with viremia parameters AUC, peak, time to peak, duration)
+  # - `[virus]-AUC-stats.png`
+  # - `[virus]-peak-stats.png`
+  # - `[virus]-ttpeak-stats.png`
+  # - `[virus]-duration-stats.png`
   
 #### Session prep ####
 ## clear Global Environment
@@ -79,6 +74,8 @@ if(!require(data.table)){
 
 #### Set parameters & Import data ####
 
+## THIS IS THE ONLY SECTION WHERE PARAMETERS NEED TO BE CHANGED IN ORDER FOR CODE TO RUN PROPERLY
+
 # set WD to folder where raw VL data is stored
 setwd("~/research/chelsea_crooks/projects/zikv_denv_interactions/antibody-repertiore-serial-flavi-exposure-in-nhp/data_raw/viral-loads")
 
@@ -87,6 +84,7 @@ setwd("~/research/chelsea_crooks/projects/zikv_denv_interactions/antibody-repert
 # list number of cohorts in analysis, cohort names, and cohort datafiles
 cohort_number <- (1:3)
 number_of_cohorts <- length(cohort_number)
+cohort_comparisons <- list(c(1,2), c(1,3), c(2,3)) # include all unique combinations of cohort numbers
 
 # identify cohort names; must be as many list items as there are cohorts in cohort_number
 cohortnames <- c("Flavivirus-naive", "ZIKV-exposed", "DENV-2/ZIKV-exposed")
@@ -95,11 +93,16 @@ cohortnames <- c("Flavivirus-naive", "ZIKV-exposed", "DENV-2/ZIKV-exposed")
 dpimin <- as.numeric(0)
 dpimax <- as.numeric(15)
 
-# sample source
+# if different axes are preferred for plots as compared to stats analysis they can be modified here
+# default is to have the same values as the parameters above
+plotdpimin <- dpimin # as.numeric()
+plotdpimax <- dpimax # as.numeric()
+
+# sample source for viral loads
 samplesource = "Plasma"
 
 # specify virus and viral load assay
-virus = "DENV-3"
+virus = "DENV-3" # how the virus will be refered to in plots and filenames; should be no spaces in name
 VLassay = "DENV3" # options: "DENV3", "Lanciotti_ZIKV_universal", "DENV2"
 
 # path to folder for saving the clean viral load data
@@ -120,7 +123,7 @@ animal_study_data <- read_csv("043-VL-study-data.csv")
 # import data as data frame
 challenge_dates <- as.data.frame(animal_study_data)
 
-# specify which challenge date you want to use and make sure its a date
+# specify which challenge date you want to use from the animal study csv and make sure its a date
 challenge_dates$dateA <- mdy(challenge_dates$dateA) # change two instances here
 chaldate <- challenge_dates$dateA # change one instance here
 names(chaldate) <- challenge_dates$animal
@@ -133,16 +136,14 @@ names(chaldate) <- challenge_dates$animal
 rawVLcsvs = list.files(pattern="*-VL-raw.csv")
 rawVLdata = lapply(rawVLcsvs, read.delim, sep=",")
 
-# if you want to import all of the VLs from all cohorts into a single file
-
-#tbl <-
-  #list.files(pattern = "*-VL-raw.csv") %>% 
-  #map_df(~read_csv(.))
-
-
 #### Defining functions and color scheme ####
 
+## function to clean up the raw data from the portal
+# takes data frame of raw viral loads as input (a)
 VLdataclean <- function(a){
+  
+  a <- raw_data_C1
+  ## remove unnecessary columns
   a$`Key` <- NULL
   a$`Nucleic.Acid` <- NULL
   a$`Viral.Load.Replicates` <- NULL
@@ -150,7 +151,7 @@ VLdataclean <- function(a){
   a$`Experiment.Number` <- NULL
   a$`RNA.Isolation.Method` <- NULL
   
-  ## rename columns
+  ## rename remaining columns
   a <- a %>%
     rename(animal = `Participant.ID`) %>%
     rename(date = `Date`) %>%
@@ -159,51 +160,49 @@ VLdataclean <- function(a){
     rename(equivocal = `Equivocal`) %>%
     rename(source = `Sample.Source`)
   
+  # make sure its a dataframe
   a <- as.data.frame(a)
   
   ## factor by animal and by assay
   a$animal <- as.factor(a$animal)
   a$assay <- as.factor(a$assay)
   
-  ## viral titers are numbers, ya know
+  ## viral titers are numbers
   a$amount <- as.numeric(a$amount)
   
   ## dates are dates
   a$date <- ymd(a$date)
   
-  ## make sure all VLs come from plasma and then remove source column
+  ## make sure all VLs come from the specified sample source and then remove source column
   a <- filter(a, a$source == samplesource)
   a$source <- NULL
   
   ## remove all rows that are 'equivocal'
   
-  # replace empty "NA" values with 0 
-  #is.na_replace_0_C1 <- a$equivocal                               
-  #is.na_replace_0_C1[is.na(is.na_replace_0_C1)] <- 0 
-  #a$equivocal <- is.na_replace_0_C1
-  
-  # convert to factor 
-  #a$equivocal <- as.factor(a$equivocal)
-  
   # select only rows that are NOT equivocal & then remove equivocal column
-  #a <- filter(a, a$equivocal == "0")
+  a <- filter(a, a$equivocal == "")
   a$equivocal <- NULL
   
   ## select only rows that use the DENV3 assay
   a <- filter(a, a$assay == VLassay)
 }
 
+## function to add a column to the raw VL data from the portal and add a column with the DPI of the data point
+# input is a list of sequential integers, with one integer for each animal in the group
 addDPI <- function(b){
-  for (y in 1:b) {
-    list_C1[[n]]$dpi[y] <- 
-      as.numeric(difftime(
-        list_C1[[n]]$date[y],
-        chaldate[[as.character(unique(list_C1[[n]]$animal))]],
+  for (y in 1:b) { # for loop to cycle through each of the indicies in the list
+    list_C1[[n]]$dpi[y] <- # create a dpi column
+      as.numeric(difftime( # dpi column is numeric and is the difference in time between
+        list_C1[[n]]$date[y], # the date in the date column in the specified list
+        chaldate[[as.character(unique(list_C1[[n]]$animal))]], # and the challenge date of the animal
         units = "days"))
   }
-  return(list_C1[[n]])
+  return(list_C1[[n]]) 
   }
 
+## function to remove any data points that are outside the defined dpi min and max range
+# dpi min and max defined in the 'set parameters' section
+# input is a list of sequential integers, with one integer for each animal in the group
 DPIcutoffs <- function(c){
   for (i in c){
     n = i
@@ -214,19 +213,23 @@ DPIcutoffs <- function(c){
   return(list_C1[[n]])
 }
 
-logtransform <- function(dd){
-  dd$amount <- as.character(dd$amount)
-  dd$amount[dd$amount == "0"] <- ("0.001")
-  dd$amount <- as.numeric(dd$amount)
-  dd$amount <- log10(dd$amount)
-  dd$amount <- as.character(dd$amount) 
-  dd$amount[dd$amount == "-3"] <- ("0")
-  dd$amount <- as.numeric(dd$amount) 
-  dd$amount[dd$amount == -5] <- (NA)
-  dd$dpi <- as.integer(dd$dpi) 
-  return(dd)
+## modify the data so that it is able to be plotted on a log scale
+# takes a dataframe of all of the cleaned viral load data for the cohort
+logtransform <- function(d){
+  d$amount <- as.character(d$amount)
+  d$amount[d$amount == "0"] <- ("0.001") # change all 0 values to 0.001 so that they are plotted on log scale
+  d$amount <- as.numeric(d$amount)
+  d$amount <- log10(d$amount) # log transform VLs
+  d$amount <- as.character(d$amount) 
+  d$amount[d$amount == "-3"] <- ("0") # set values that are -3 on log scale -- which were previously 0 -- to 0
+  d$amount <- as.numeric(d$amount) 
+  #d$amount[d$amount == -5] <- (NA) 
+  d$dpi <- as.integer(d$dpi) 
+  return(d)
 }
 
+## ggplot code for plotting viremia data
+# takes log transformed data frame as input
 viremiaplot <- function(e){
   Plot_C1 <- ggplot(na.omit(e), aes(dpi, amount, group = animal, color = animal)) + 
     geom_line(size = .5) + 
@@ -235,12 +238,12 @@ viremiaplot <- function(e){
       labels = c(2, 3, 4, 5, 6, 7, 8),
       expand = c(0, 0)) + 
     scale_x_continuous(
-      breaks = dpimin:dpimax, 
-      labels = dpimin:dpimax,
+      breaks = plotdpimin:plotdpimax, 
+      labels = plotdpimin:plotdpimax,
       expand = c(0, 0)) + 
     coord_cartesian(
       ylim = c(2, 8),
-      xlim = c((dpimin - 1),(dpimax + 1))) + 
+      xlim = c((plotdpimin - 1),(plotdpimax + 1))) + 
     scale_color_manual(
       values = anihex, 
       breaks = color_break_C1) +
@@ -260,9 +263,11 @@ viremiaplot <- function(e){
       strip.text.y = element_text(size = 10)) #change text size
 }
 
-pngplot <- function(f){
+## ggsave code to save the plot output 
+# takes a ggplot list a input
+png_VLplot <- function(f){
   ggsave(
-    paste(paste("C", cohort_number[[x]], sep=''), virus, "VL.png", sep="-"),
+    paste(paste("C", cohort_number[[x]], sep=''), virus, "VL.png", sep="-"), # file name
     plot = f,
     device = NULL,
     path = plotpng,
@@ -276,13 +281,13 @@ pngplot <- function(f){
   )
 }
 
-## define color scheme information
+## define color scheme information using data from the input animmal study csv
 color_scheme <- as.data.frame(animal_study_data)
 colors <- distinct(color_scheme, animal, hexcode)
 anihex <- colors$hexcode
 names(anihex) <- colors$animal
 
-#### Clean VL data ####
+#### Clean + Plot VL data ####
 
 ## for loop to perform these functions for each of the cohorts defined above
 for (i in cohort_number){
@@ -295,7 +300,7 @@ for (i in cohort_number){
   ## Create df with cohort animals
   C1 <- unique(raw_data_C1[c("animal")])
 
-  ## Create list with each animal per group
+  ## Create list with each animal in the group
   list_C1 <- split(raw_data_C1,raw_data_C1$animal)
 
   ## calculate dpi -- there must be a VL for day 0 in order for function to work
@@ -304,8 +309,8 @@ for (i in cohort_number){
   length_list_C1 <- 1:length(list_C1)
 
   # for loop to calculate DPI based on the challenge date and to create the DPI column
-  # if/else 1 - 
-  # if/else 2 - 
+  # if/else 1 - make sure that there is some VL data for the cohort, else return "no VL data"
+  # if/else 2 - if there is some VL, make sure that there are more than 2 data points, else return "insufficient VL data"
   if (length(C1$animal) > 0){
   for (i in length_list_C1){
     n = i
@@ -330,7 +335,7 @@ for (i in cohort_number){
   
   #### Plot viremia data ####
   
- if (length(C1$animal) > 0){
+ if (length(C1$animal) > 0){ # check to make sure there is 
     ## change 0s to 0.001 and log transform
     df_C1 <- logtransform(df_C1)
     
@@ -344,14 +349,14 @@ for (i in cohort_number){
     Plot_C1
     
     # write out figure to png
-    pngplot(Plot_C1)
+    png_VLplot(Plot_C1)
     
     } else {print("No viral load data to plot")}
   }
 #### Stats Set-up ####
 
 ## set working directory to the location of the cleaned data files
-setwd("~/research/chelsea_crooks/projects/zikv_denv_interactions/antibody-repertiore-serial-flavi-exposure-in-nhp/data_analysis/VL-cleaned")
+setwd(cleanVLcsv)
 
 ## import cleaned data files for each cohort to be used
 
@@ -362,16 +367,115 @@ virusfiletype <- paste("*", virus, "VL-clean.csv", sep="-")
 cleanVLcsvs = list.files(pattern=virusfiletype)
 cleanVLdata = lapply(cleanVLcsvs, read.delim, sep=",")
 
-# write function to eliminate rows that have a VL < 100
+## write function to eliminate rows that have a VL < 100
 lod_cutoff <- function(x){
   x <- x%>%
     filter(amount > 100)
   return (x)
 }
+
+## write function to plot stats (note - max of 6 cohorts can be plotted, otherwise need to change the y coordinates of signif bars)
+# g - name of stats comparison (log_AUC, log_peak, ttpeak, duration)
+# j - name of mean stats comparison (mean_auc, mean_peak, mean_ttpeak, mean_duration)
+# k - y-axis label
+# l - y position of the significance bars, options defined below
+y_position1 <- c(7.87, 8.37, 8.87, 9.37, 9.87, 10.37)
+y_position2 <- c(11, 12, 13, 14, 15, 16)
+# m - y axis limits, options defined below
+ylim1 <- c(2, 10)
+ylim2 <- c(0, 15)
+
+statplot <- function(g, j, k, l, m){
+  stat_plot <- ggplot(ALL_stats, aes(group, g, group = group, color = animal)) + 
+    geom_point(position = position_jitter(w = 0.05, h = 0)) + 
+    geom_errorbar(data = ALL_summary_stats, aes(x = group, ymax = j, ymin = j),
+                  size = 0.5, inherit.aes = F, width = 0.2) + 
+    geom_signif(comparisons =  cohort_comparisons, 
+                test='t.test', map_signif_level = c("***"=0.001, "**"=0.01, "*"=0.05, "NS"=2),
+                y_position = l, tip_length = 0) + 
+    coord_cartesian(ylim = m) +
+    scale_x_discrete(
+      breaks = unique(ALL_stats$group), 
+      labels = cohortnames) +
+    scale_color_manual(
+      values = anihex,
+      breaks = c(animal_study_data$animal)) + 
+    labs(
+      y = k) + 
+    theme_bw() + #removes grey background
+    theme(
+      panel.grid.major = element_blank(),     #removes ver. grid lines
+      panel.grid.minor = element_blank(),     #removes hor. grid lines
+      legend.position = "none",               #remove legend
+      legend.title = element_blank(),         #remove legend title
+      plot.title = element_text(hjust = 0),   #move title left
+      plot.margin = margin(10, 10, 10, 20),   #room for two-line x-axis title
+      strip.text.x = element_text(size = 10), #change text size
+      strip.text.y = element_text(size = 10), #change text size
+      axis.title.x = element_blank(),         #remove x-axis title
+      axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+}
   
+## write function to save the statistics plots
+# o - name of the statistic as a string
+# p - ggplot list
+png_statplot <- function(o, p){
+  ggsave(
+    paste(virus, o, "stats.png", sep="-"),
+    plot = p,
+    device = NULL,
+    path = plotpng,
+    scale = 1,
+    width = 4,
+    height = 4,
+    units = c("in"),
+    dpi = 300,
+    limitsize = TRUE,
+    bg = NULL
+  )
+}
+
+# create empty data frame for p-values values
+stat_pvalues <- data.frame(matrix(ncol = 0, nrow = 3))
+stat_pvalues <- stat_pvalues%>%
+  add_column(comparisons = c("C1/C2", "C1/C3", "C2/C3"))
+
+## T-test
+# q - column in the ALL_stats dataframe (ALL_stats$log_auc, ALL_stats$log_peak, ALL_stats$ttpeak, ALL_stats$duration)
+# aa - dataframe (stats_pvalue) to add data to
+# bb - name of the column in the p-value datafram (auc, peak, ttpeak, duration)
+
+ttest <- function(q, aa, bb){
+  ALL_ttest <- data.frame(ALL_stats$group, q)
+  
+  ttest_C1 <- filter(ALL_ttest, ALL_stats.group=="C1")
+  ttest_C2 <- filter(ALL_ttest, ALL_stats.group=="C2")
+  ttest_C3 <- filter(ALL_ttest, ALL_stats.group=="C3")
+  
+  # the all-mighty p-value
+  ttest12 <- t.test(ttest_C1[2], ttest_C2[2])
+  ttest13 <- t.test(ttest_C1[2], ttest_C3[2])
+  ttest23 <- t.test(ttest_C2[2], ttest_C3[2])
+  
+  # add p-value to dataframe
+  #assign("bb", auc)
+  
+  temp <- c(ttest12$p.value, ttest13$p.value, ttest23$p.value)
+  
+  aa <- aa%>%
+    add_column(temp)%>%
+    rename(!!bb := temp)
+  }
+
 #### AUC ####
 
 aunderc <- vector("list",number_of_cohorts)
+
+# df for summary stats
+auc_summary <- data.frame(matrix(ncol = 2, nrow = 0))
+u <- c("group", "mean_auc")
+colnames(auc_summary) <- u
+
 for (i in cohort_number){
   x=i
   clean_data_C1 <- as.data.frame(cleanVLdata[[x]])
@@ -386,7 +490,7 @@ for (i in cohort_number){
 
   # create empty data frame for AUC values
   aunderc_C1 <- data.frame(matrix(ncol = 2, nrow = 0))
-  newdf <- c("index", "AUC")
+  newdf <- c("index", "auc")
   colnames(aunderc_C1) <- newdf
   
   #calculate AUC for each animal and output to empty dataframe aunderc_C1
@@ -398,17 +502,31 @@ for (i in cohort_number){
   aunderc_C1 <- aunderc_C1 %>%
     add_column(C1,
                .after = "index")%>%
-    add_column(log_AUC = log10(aunderc_C1$AUC))
+    add_column(log_auc = log10(aunderc_C1$auc))%>%
+    add_column(group = paste("C", x, sep=""),
+               .after = "animal")
     
   aunderc_C1 <- aunderc_C1[-c(1)]
   
   # save the output to the auc list
   aunderc[[x]] <- aunderc_C1
+  
+  # add mean of the cohort's AUC to summary data frame
+  auc_summary[nrow(auc_summary)+1,] = c(unique(aunderc[[x]]$group), mean(aunderc[[x]]$log_auc))
   }
+
+# convert mean values into numeric
+auc_summary$mean_auc <- as.numeric(auc_summary$mean_auc)
 
 #### Peak ####
 
 peak <- vector("list",number_of_cohorts)
+
+# df for summary stats
+peak_summary <- data.frame(matrix(ncol = 2, nrow = 0))
+t <- c("group", "mean_peak")
+colnames(peak_summary) <- t
+
 for (i in cohort_number){
   x=i
   clean_data_C1 <- as.data.frame(cleanVLdata[[x]])
@@ -430,17 +548,31 @@ for (i in cohort_number){
   peak_C1 <- peak_C1 %>%
     add_column(C1,
                .after = "index")%>%
-    add_column(log_peak = log10(peak_C1$peak))
+    add_column(log_peak = log10(peak_C1$peak))%>%
+    add_column(group = paste("C", x, sep=""),
+               .after = "animal")
   
   peak_C1 <- peak_C1[-c(1)]
   
   # save the output to the auc list
   peak[[x]] <- peak_C1
+  
+  # add mean of the cohort's peak to summary data frame
+  peak_summary[nrow(peak_summary)+1,] = c(unique(peak[[x]]$group), mean(peak[[x]]$log_peak))
 }
+
+# convert mean values into numeric
+peak_summary$mean_peak <- as.numeric(peak_summary$mean_peak)
 
 #### Time to peak ####
 
 ttpeak <- vector("list",number_of_cohorts)
+
+# df for summary stats
+ttpeak_summary <- data.frame(matrix(ncol = 2, nrow = 0))
+s <- c("group", "mean_ttpeak")
+colnames(ttpeak_summary) <- s
+
 for (i in cohort_number){
   x=i
   clean_data_C1 <- as.data.frame(cleanVLdata[[x]])
@@ -460,17 +592,31 @@ for (i in cohort_number){
   # replace the index with the animal names from data frame C3, add column with log transformed data
   ttpeak_C1 <- ttpeak_C1 %>%
     add_column(C1,
-               .after = "index")
+               .after = "index")%>%
+    add_column(group = paste("C", x, sep=""),
+               .after = "animal")
   
   ttpeak_C1 <- ttpeak_C1[-c(1)] 
   
   # save the output to the auc list
   ttpeak[[x]] <- ttpeak_C1
+  
+  # add mean of the cohort's ttpeak to summary data frame
+  ttpeak_summary[nrow(ttpeak_summary)+1,] = c(unique(ttpeak[[x]]$group), mean(ttpeak[[x]]$ttpeak))
 }
+
+# convert mean values into numeric
+ttpeak_summary$mean_ttpeak <- as.numeric(ttpeak_summary$mean_ttpeak)
 
 #### Duration ####
 
 duration <- vector("list",number_of_cohorts)
+
+# df for summary stats
+duration_summary <- data.frame(matrix(ncol = 2, nrow = 0))
+r <- c("group", "mean_duration")
+colnames(duration_summary) <- r
+
 for (i in cohort_number){
   x=i
   clean_data_C1 <- as.data.frame(cleanVLdata[[x]])
@@ -494,299 +640,84 @@ for (i in cohort_number){
   # replace the index with the animal names from data frame C1, add column with log transformed data
   duration_C1 <- duration_C1 %>%
     add_column(C1,
-               .after = "index")
+               .after = "index")%>%
+    add_column(group = paste("C", x, sep=""),
+               .after = "animal")
   
   duration_C1 <- duration_C1[-c(1)]
   
   # save the output to the auc list
   duration[[x]] <- duration_C1
+  
+  # add mean of the cohort's duration to summary data frame
+  duration_summary[nrow(duration_summary)+1,] = c(unique(duration[[x]]$group), mean(duration[[x]]$duration))
 }
 
-#### ALL ####
-## C1 - Flavi-naive - stats
-C1_stats_df <- aunderc_C1 %>%
-  add_column(peak_C1[2:3], ttpeak_C1[2], duration_C1[2])%>%
-  add_column(group = "C1",
-             .after = "animal")
+# convert mean values into numeric
+duration_summary$mean_duration <- as.numeric(duration_summary$mean_duration)
 
-C1_stats_summary <- data.frame(matrix(ncol = 2, nrow = 0))
-x <- c("statistic", "C1")
-colnames(C1_stats_summary) <- x
-  
-C1_stats_summary[nrow(C1_stats_summary)+1,] = c("mean_AUC", mean(C1_stats_df$log_AUC))
-C1_stats_summary[nrow(C1_stats_summary)+1,] = c("mean_peak", mean(C1_stats_df$log_peak))
-C1_stats_summary[nrow(C1_stats_summary)+1,] = c("mean_ttpeak", mean(C1_stats_df$ttpeak))
-C1_stats_summary[nrow(C1_stats_summary)+1,] = c("mean_duration", mean(C1_stats_df$duration))
+#### Summary Stats ####
 
-## C2 - Zika-exposed - stats
-C2_stats_df <- aunderc_C2 %>%
-  add_column(peak_C2[2:3], ttpeak_C2[2], duration_C2[2])%>%
-  add_column(group = "C2",
-             .after = "animal")
+# combine all of the summmary stats into one data frame
+ALL_summary_stats <- bind_cols(auc_summary, 
+                               peak_summary[2], 
+                               ttpeak_summary[2], 
+                               duration_summary[2])
 
-C2_stats_summary <- data.frame(matrix(ncol = 2, nrow = 0))
-x <- c("statistic", "C2")
-colnames(C2_stats_summary) <- x
+# combine all of the stats dataframes together
+aunderc_all <- bind_rows(aunderc[1:number_of_cohorts])
+peak_all <- bind_rows(peak[1:number_of_cohorts])
+ttpeak_all <- bind_rows(ttpeak[1:number_of_cohorts])
+duration_all <- bind_rows(duration[1:number_of_cohorts])
 
-C2_stats_summary[nrow(C2_stats_summary)+1,] = c("mean_AUC", mean(C2_stats_df$log_AUC))
-C2_stats_summary[nrow(C2_stats_summary)+1,] = c("mean_peak", mean(C2_stats_df$log_peak))
-C2_stats_summary[nrow(C2_stats_summary)+1,] = c("mean_ttpeak", mean(C2_stats_df$ttpeak))
-C2_stats_summary[nrow(C2_stats_summary)+1,] = c("mean_duration", mean(C2_stats_df$duration))
+ALL_stats <- bind_cols(aunderc_all, peak_all[3:4], ttpeak_all[3], duration_all[3])
 
-## C3 - DENV-2/ZIKV-exposed- stats
-C3_stats_df <- aunderc_C3 %>%
-  add_column(peak_C3[2:3], ttpeak_C3[2], duration_C3[2])%>%
-  add_column(group = "C3",
-             .after = "animal")
-
-C3_stats_summary <- data.frame(matrix(ncol = 2, nrow = 0))
-x <- c("statistic", "C3")
-colnames(C3_stats_summary) <- x
-
-C3_stats_summary[nrow(C3_stats_summary)+1,] = c("mean_AUC", mean(C3_stats_df$log_AUC))
-C3_stats_summary[nrow(C3_stats_summary)+1,] = c("mean_peak", mean(C3_stats_df$log_peak))
-C3_stats_summary[nrow(C3_stats_summary)+1,] = c("mean_ttpeak", mean(C3_stats_df$ttpeak))
-C3_stats_summary[nrow(C3_stats_summary)+1,] = c("mean_duration", mean(C3_stats_df$duration))
-
-
-## one big, happy df (summary and all)
+## write out data
 
 # means for each statistic for each group
-ALL_stats_summary <- C1_stats_summary %>%
-  add_column(C2_stats_summary[2], C3_stats_summary[2])
-ALL_stats_summary <- setDT(ALL_stats_summary)
-ALL_stats_summary <- dcast(melt(ALL_stats_summary, id.vars = "statistic"), variable ~ statistic)
-write.csv(ALL_stats_summary,"~/research/chelsea_crooks/projects/zikv_denv_interactions/antibody-repertiore-serial-flavi-exposure-in-nhp/data_analysis/VL-cleaned/043-denv-3-viremia-stats-summary.csv", row.names = FALSE)
+write.csv(ALL_summary_stats, paste(virus, "viremia-stats-summary.csv", sep="-"), row.names = FALSE)
 
 # values for each animal
-ALL_stats_df <- rbind(C1_stats_df, C2_stats_df, C3_stats_df)
-write.csv(ALL_stats_df,"~/research/chelsea_crooks/projects/zikv_denv_interactions/antibody-repertiore-serial-flavi-exposure-in-nhp/data_analysis/VL-cleaned/043-denv-3-viremia-stats-all.csv", row.names = FALSE)
+write.csv(ALL_stats, paste(virus, "viremia-stats-all.csv", sep="-"), row.names = FALSE)
 
 # create CSV for copy paste into the master spreadsheet
-master_stats_df <- select(ALL_stats_df, animal, AUC, peak, ttpeak, duration)
-master_stats_df$animal <- as.character(master_stats_df$animal)
-master_stats_df <- master_stats_df[order(master_stats_df$animal),]
-write.csv(master_stats_df,"~/research/chelsea_crooks/projects/zikv_denv_interactions/antibody-repertiore-serial-flavi-exposure-in-nhp/data_analysis/VL-cleaned/043-denv-3-master-viremia-stats-all.csv", row.names = FALSE)
+master_stats <- ALL_stats[-c(2,4,6)]
+write.csv(master_stats, paste(virus, "master-viremia-stats-all.csv", sep="-"), row.names = FALSE)
 
-#### AUC Plot ####
-AUC_plot <- ggplot(ALL_stats_df, aes(group, log_AUC, group = group, color = animal)) + 
-  geom_point(position = position_jitter(w = 0.05, h = 0)) + 
-  #geom_errorbar(data = ALL_stats_summary, aes(ALL_stats_summary$variable, ymax = mean_AUC, ymin = mean_AUC),
-   #            size = 0.5, inherit.aes = F, width = 0.2) + 
-  geom_signif(comparisons =  list(c("Naive", "ZIKV-history"), 
-                                  c("Naive", "DENV-2/ZIKV-history"), 
-                                  c("ZIKV-history", "DENV-2/ZIKV-history")), 
-              test='t.test', map_signif_level = c("***"=0.001, "**"=0.01, "*"=0.05, "NS"=2),
-              y_position = c(7.87, 8.67, 9.47), tip_length = 0) + 
-  coord_cartesian(ylim = c(2, 10)) +
-  scale_color_manual(
-    values = anihex,
-    breaks = c(color_break_C1, color_break_C2, color_break_C3)) + #Orange
-  labs(
-    y = expression(paste("Area Under the Curve (log"[10],")"))) + 
-  theme_bw() + #removes grey background
-  theme(
-    panel.grid.major = element_blank(),     #removes ver. grid lines
-    panel.grid.minor = element_blank(),     #removes hor. grid lines
-    legend.position = "none",               #remove legend
-    legend.title = element_blank(),         #remove legend title
-    plot.title = element_text(hjust = 0),   #move title left
-    plot.margin = margin(10, 10, 10, 20),   #room for two-line x-axis title
-    strip.text.x = element_text(size = 10), #change text size
-    strip.text.y = element_text(size = 10), #change text size
-    axis.title.x = element_blank(),         #remove x-axis title
-    axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+#### Stat Plots ####
 
-AUC_plot
+# execute function to plot stats
+# g - name of stats comparison (ALL_stats$log_AUC, ALL_stats$log_peak, ALL_stats$ttpeak, ALL_stats$duration)
+# j - name of mean stats comparison (ALL_summary_stats$mean_auc, ALL_summary_stats$mean_peak, ALL_summary_stats$mean_ttpeak, ALL_summary_stats$mean_duration)
+# k - y-axis label 
+  # expression(paste("Area Under the Curve (log"[10],")"))
+  # expression(paste("Peak viremia (log"[10],")"))
+  # expression(paste("Time to peak viremia (days)"))
+  # expression(paste("Duration of detectable viremia (days)"))
+# l - y position of the significance bars, options defined above (y_position1, y_position2)
+# m - y axis limits, options defined above (ylim1, ylim2)
 
-## T-test
-ALL_ttest.df <- data.frame(ALL_df$group, ALL_df$log_AUC)
-ALL_ttest.df <- ALL_ttest.df %>%
-  rename(group = ALL_df.group) %>%
-  rename(log_AUC = ALL_df.log_AUC)
+auc_plot <- statplot(ALL_stats$log_auc, ALL_summary_stats$mean_auc, expression(paste("Area Under the Curve (log"[10],")")), y_position1, ylim1)
+save_auc_plot <- png_statplot("AUC", auc_plot)
 
-AUC_ttest.dfN <- filter(ALL_ttest.df, group=="Naive")
-AUC_ttest.df1 <- filter(ALL_ttest.df, group=="ZIKV-history")
-AUC_ttest.df2 <- filter(ALL_ttest.df, group=="DENV-2/ZIKV-history")
+peak_plot <- statplot(ALL_stats$log_peak, ALL_summary_stats$mean_peak, expression(paste("Peak viremia (log"[10],")")), y_position1, ylim1)
+save_peak_plot <- png_statplot("peak", peak_plot)
 
-# the all-mighty p-value
-AUC_ttestN1 <- t.test(AUC_ttest.dfN$log_AUC, AUC_ttest.df1$log_AUC)
-AUC_ttestN2 <- t.test(AUC_ttest.dfN$log_AUC, AUC_ttest.df2$log_AUC)
-AUC_ttest12 <- t.test(AUC_ttest.df1$log_AUC, AUC_ttest.df2$log_AUC)
-cat("Naive/C1 p-value:",AUC_ttestN1$p.value,"\n");cat("Naive/C2 p-value:",AUC_ttestN2$p.value,"\n");cat("   C1/C2 p-value:",AUC_ttest12$p.value,"\n")
+ttpeak_plot <- statplot(ALL_stats$ttpeak, ALL_summary_stats$mean_ttpeak, expression(paste("Time to peak viremia (days)")), y_position2, ylim2)
+save_ttpeak_plot <- png_statplot("ttpeak", ttpeak_plot)
 
-#### Peak Plot ####
-Peak_plot <- ggplot(ALL_df, aes(group, log_Peak, group = group, color = organism)) + 
-  geom_point(position = position_jitter(w = 0.05, h = 0)) + 
-  geom_errorbar(data = ALL_df, aes(group, ymax = ymean_Peak, ymin = ymean_Peak),
-                size = 0.5, inherit.aes = F, width = 0.2) + 
-  geom_signif(comparisons =  list(c("Naive", "ZIKV-history"), 
-                                  c("Naive", "DENV-2/ZIKV-history"), 
-                                  c("ZIKV-history", "DENV-2/ZIKV-history")), 
-              test='t.test', map_signif_level = c("***"=0.001, "**"=0.01, "*"=0.05, "NS"=2),
-              y_position = c(7.87, 8.67, 9.47), tip_length = 0) + 
-  coord_cartesian(ylim = c(2, 10)) +
-  scale_color_manual(
-    values = c(r14059 = "#339933", rh3008 = "#33CC66", rh3009 = "#006633", rh3012 = "#33FF99", rh3018 = "#339966", rh3019 = "#00CC00", rh3035 = "#00CC66", rh3039 = "#00FF00", #Green
-               r03041 = "#3366FF", r05029 = "#003366", rh2005 = "#0033FF", rh2799 = "#6699FF", rh2809 = "#3366CC", rhbc48 = "#3399CC", rhbd23 = "#00CCFF", rhbe47 = "#0033CC", #Blue
-               r04118 = "#FF6600", r04159 = "#993300", r05055 = "#FF9933", r07035 = "#FFCC99", r11026 = "#FF9900"), #Orange
-    breaks = c("r14059", "rh3008", "rh3009", "rh3012", "rh3018", "rh3019", "rh3035", "rh3039", #Green
-               "r03041", "r05029", "rh2005", "rh2799", "rh2809", "rhbc48", "rhbd23", "rhbe47",  #Blue
-               "r04118", "r04159", "r05055", "r07035", "r11026")) + #Orange
-  labs(
-    y = expression(paste("Peak viremia (log"[10],")"))) + 
-  theme_bw() + #removes grey background
-  theme(
-    panel.grid.major = element_blank(),     #removes ver. grid lines
-    panel.grid.minor = element_blank(),     #removes hor. grid lines
-    legend.position = "none",               #remove legend
-    legend.title = element_blank(),         #remove legend title
-    plot.title = element_text(hjust = 0),   #move title left
-    plot.margin = margin(10, 10, 10, 20),   #room for two-line x-axis title
-    strip.text.x = element_text(size = 10), #change text size
-    strip.text.y = element_text(size = 10), #change text size
-    axis.title.x = element_blank(),         #remove x-axis title
-    axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-
-## T-test
-ALL_ttest.df_Peak <- data.frame(ALL_df$group, ALL_df$log_Peak)
-ALL_ttest.df_Peak <- ALL_ttest.df_Peak %>%
-  rename(group = ALL_df.group) %>%
-  rename(log_Peak = ALL_df.log_Peak)
-
-ALL_ttest.df_Peak_N <- filter(ALL_ttest.df_Peak, group=="Naive")
-ALL_ttest.df_Peak_1 <- filter(ALL_ttest.df_Peak, group=="ZIKV-history")
-ALL_ttest.df_Peak_2 <- filter(ALL_ttest.df_Peak, group=="DENV-2/ZIKV-history")
-
-# the all-mighty p-value
-ALL_ttest.df_Peak_N1 <- t.test(ALL_ttest.df_Peak_N$log_Peak, ALL_ttest.df_Peak_1$log_Peak)
-ALL_ttest.df_Peak_N2 <- t.test(ALL_ttest.df_Peak_N$log_Peak, ALL_ttest.df_Peak_2$log_Peak)
-ALL_ttest.df_Peak_12 <- t.test(ALL_ttest.df_Peak_1$log_Peak, ALL_ttest.df_Peak_2$log_Peak)
-
-#### ttPeak Plot ####
-ttPeak_plot <- ggplot(ALL_df, aes(group, ttPeak, group = group, color = organism)) + 
-  geom_point(position = position_jitter(w = 0.05, h = 0)) + 
-  geom_errorbar(data = ALL_df, aes(group, ymax = ymean_ttPeak, ymin = ymean_ttPeak),
-                size = 0.5, inherit.aes = F, width = 0.2) + 
-  geom_signif(comparisons =  list(c("Naive", "ZIKV-history"), 
-                                  c("Naive", "DENV-2/ZIKV-history"), 
-                                  c("ZIKV-history", "DENV-2/ZIKV-history")), 
-              test='t.test', map_signif_level = c("***"=0.001, "**"=0.01, "*"=0.05, "NS"=2),
-              y_position = c(11, 12.5, 14), tip_length = 0) + 
-  coord_cartesian(ylim = c(0, 15)) +
-  scale_color_manual(
-    values = c(r14059 = "#339933", rh3008 = "#33CC66", rh3009 = "#006633", rh3012 = "#33FF99", rh3018 = "#339966", rh3019 = "#00CC00", rh3035 = "#00CC66", rh3039 = "#00FF00", #Green
-               r03041 = "#3366FF", r05029 = "#003366", rh2005 = "#0033FF", rh2799 = "#6699FF", rh2809 = "#3366CC", rhbc48 = "#3399CC", rhbd23 = "#00CCFF", rhbe47 = "#0033CC", #Blue
-               r04118 = "#FF6600", r04159 = "#993300", r05055 = "#FF9933", r07035 = "#FFCC99", r11026 = "#FF9900"), #Orange
-    breaks = c("r14059", "rh3008", "rh3009", "rh3012", "rh3018", "rh3019", "rh3035", "rh3039", #Green
-               "r03041", "r05029", "rh2005", "rh2799", "rh2809", "rhbc48", "rhbd23", "rhbe47",  #Blue
-               "r04118", "r04159", "r05055", "r07035", "r11026")) + #Orange
-  labs(
-    y = expression(paste("Time to peak viremia (days)"))) + 
-  theme_bw() + #removes grey background
-  theme(
-    panel.grid.major = element_blank(),     #removes ver. grid lines
-    panel.grid.minor = element_blank(),     #removes hor. grid lines
-    legend.position = "none",               #remove legend
-    legend.title = element_blank(),         #remove legend title
-    plot.title = element_text(hjust = 0),   #move title left
-    plot.margin = margin(10, 10, 10, 20),   #room for two-line x-axis title
-    strip.text.x = element_text(size = 10), #change text size
-    strip.text.y = element_text(size = 10), #change text size
-    axis.title.x = element_blank(),         #remove x-axis title
-    axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-
-## T-test
-ALL_ttest.df_ttPeak <- data.frame(ALL_df$group, ALL_df$ttPeak)
-ALL_ttest.df_ttPeak <- ALL_ttest.df_ttPeak %>%
-  rename(group = ALL_df.group) %>%
-  rename(ttPeak = ALL_df.ttPeak)
-
-ttest_ttPeak.dfN <- filter(ALL_ttest.df_ttPeak, group=="Naive")
-ttest_ttPeak.df1 <- filter(ALL_ttest.df_ttPeak, group=="ZIKV-history")
-ttest_ttPeak.df2 <- filter(ALL_ttest.df_ttPeak, group=="DENV-2/ZIKV-history")
-
-# the all-mighty p-value
-ttPeak_ttestN1 <- t.test(ttest_ttPeak.dfN$ttPeak, ttest_ttPeak.df1$ttPeak)
-ttPeak_ttestN2 <- t.test(ttest_ttPeak.dfN$ttPeak, ttest_ttPeak.df2$ttPeak)
-ttPeak_ttest12 <- t.test(ttest_ttPeak.df1$ttPeak, ttest_ttPeak.df2$ttPeak)
-cat("     Naive/ZIKV-history p-value:",ttPeak_ttestN1$p.value,"\n");cat("Naive/DENV-2/ZIKV-history p-value:",ttPeak_ttestN2$p.value,"\n");cat(" ZIKV/DENV-2/ZIKV-history p-value:",ttPeak_ttest12$p.value,"\n")
-cat("                  Naive mean value:",ALL_df$ymean_ttPeak[which(ALL_df$organism=="rh3019")],"\n");cat("Naive/DENV-2/ZIKV-history mean value:",ALL_df$ymean_ttPeak[which(ALL_df$organism=="rh2799")],"\n");cat(" ZIKV/DENV-2/ZIKV-history mean value:",ALL_df$ymean_ttPeak[which(ALL_df$organism=="r11026")],"\n")
-
-#### Dur Plot ####
-dur_plot <- ggplot(ALL_df, aes(group, dur, group = group, color = organism)) + 
-  geom_point(position = position_jitter(w = 0.05, h = 0)) + 
-  geom_errorbar(data = ALL_df, aes(group, ymax = ymean_dur, ymin = ymean_dur),
-                size = 0.5, inherit.aes = F, width = 0.2) + 
-  geom_signif(comparisons =  list(c("Naive", "ZIKV-history"), 
-                                  c("Naive", "DENV-2/ZIKV-history")), 
-              test='t.test', map_signif_level = F,
-              y_position = c(11, 12.5), tip_length = 0) + 
-  geom_signif(comparisons =  list(c("ZIKV-history", "DENV-2/ZIKV-history")), 
-              test='t.test', map_signif_level = c("***"=0.001, "**"=0.01, "*"=0.05, "NS"=2),
-              y_position = c(14), tip_length = 0) + 
-  coord_cartesian(ylim = c(0, 15)) +
-  scale_color_manual(
-    values = c(r14059 = "#339933", rh3008 = "#33CC66", rh3009 = "#006633", rh3012 = "#33FF99", rh3018 = "#339966", rh3019 = "#00CC00", rh3035 = "#00CC66", rh3039 = "#00FF00", #Green
-               r03041 = "#3366FF", r05029 = "#003366", rh2005 = "#0033FF", rh2799 = "#6699FF", rh2809 = "#3366CC", rhbc48 = "#3399CC", rhbd23 = "#00CCFF", rhbe47 = "#0033CC", #Blue
-               r04118 = "#FF6600", r04159 = "#993300", r05055 = "#FF9933", r07035 = "#FFCC99", r11026 = "#FF9900"), #Orange
-    breaks = c("r14059", "rh3008", "rh3009", "rh3012", "rh3018", "rh3019", "rh3035", "rh3039", #Green
-               "r03041", "r05029", "rh2005", "rh2799", "rh2809", "rhbc48", "rhbd23", "rhbe47",  #Blue
-               "r04118", "r04159", "r05055", "r07035", "r11026")) + #Orange
-  labs(
-    y = expression(paste("Duration of detectable viremia (days)"))) + 
-  theme_bw() + #removes grey background
-  theme(
-    panel.grid.major = element_blank(),     #removes ver. grid lines
-    panel.grid.minor = element_blank(),     #removes hor. grid lines
-    legend.position = "none",               #remove legend
-    legend.title = element_blank(),         #remove legend title
-    plot.title = element_text(hjust = 0),   #move title left
-    plot.margin = margin(10, 10, 10, 20),   #room for two-line x-axis title
-    strip.text.x = element_text(size = 10), #change text size
-    strip.text.y = element_text(size = 10), #change text size
-    axis.title.x = element_blank(),         #remove x-axis title
-    axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-
-## T-test
-ALL_ttest.df_dur <- data.frame(ALL_df$group, ALL_df$dur)
-ALL_ttest.df_dur <- ALL_ttest.df_dur %>%
-  rename(group = ALL_df.group) %>%
-  rename(dur = ALL_df.dur)
-
-ttest_dur.dfN <- filter(ALL_ttest.df_dur, group=="Naive")
-ttest_dur.df1 <- filter(ALL_ttest.df_dur, group=="ZIKV-history")
-ttest_dur.df2 <- filter(ALL_ttest.df_dur, group=="DENV-2/ZIKV-history")
-
-# the all-mighty p-value
-dur_ttestN1 <- t.test(ttest_dur.dfN$dur, ttest_dur.df1$dur)
-dur_ttestN2 <- t.test(ttest_dur.dfN$dur, ttest_dur.df2$dur)
-dur_ttest12 <- t.test(ttest_dur.df1$dur, ttest_dur.df2$dur)
-cat("     Naive/ZIKV-history p-value:",dur_ttestN1$p.value,"\n");cat("Naive/DENV-2/ZIKV-history p-value:",dur_ttestN2$p.value,"\n");cat(" ZIKV/DENV-2/ZIKV-history p-value:",dur_ttest12$p.value,"\n")
-cat("                  Naive mean value:",ALL_df$ymean_dur[which(ALL_df$organism=="rh3019")],"\n");cat("Naive/DENV-2/ZIKV-history mean value:",ALL_df$ymean_dur[which(ALL_df$organism=="rh2799")],"\n");cat(" ZIKV/DENV-2/ZIKV-history mean value:",ALL_df$ymean_dur[which(ALL_df$organism=="r11026")],"\n")
-
-#### All plots ####
-Plot_NAIVE # 600 x 300
-Plot_Blue
-Plot_Orange
-grid.arrange(Plot_NAIVE,Plot_Blue,Plot_Orange, nrow = 3) # 900 x 600 vert
-grid.arrange(Plot_NAIVE,Plot_Blue,Plot_Orange, nrow = 1) # 1500 x 300 horiz
-
-AUC_plot # 300 x 350
-cat("AUC:\n");cat("       Naive vs. ZIKV-history p-value:",AUC_ttestN1$p.value,"\n");cat("Naive vs. DENV-2/ZIKV-history p-value:",AUC_ttestN2$p.value,"\n");cat(" ZIKV vs. DENV-2/ZIKV-history p-value:",AUC_ttest12$p.value,"\n");cat("                     Naive mean value:",ALL_df$ymean_AUC[which(ALL_df$organism=="rh3019")],"\n");cat("              ZIKV-history mean value:",ALL_df$ymean_AUC[which(ALL_df$organism=="rh2799")],"\n");cat("       DENV-2/ZIKV-history mean value:",ALL_df$ymean_AUC[which(ALL_df$organism=="r11026")],"\n")
-
-Peak_plot # 300 x 350
-cat("Peak:\n");cat("       Naive vs. ZIKV-history p-value:",ALL_ttest.df_Peak_N1$p.value,"\n");cat("Naive vs. DENV-2/ZIKV-history p-value:",ALL_ttest.df_Peak_N2$p.value,"\n");cat(" ZIKV vs. DENV-2/ZIKV-history p-value:",ALL_ttest.df_Peak_12$p.value,"\n");cat("                     Naive mean value:",ALL_df$ymean_Peak[which(ALL_df$organism=="rh3019")],"\n");cat("              ZIKV-history mean value:",ALL_df$ymean_Peak[which(ALL_df$organism=="rh2799")],"\n");cat("       DENV-2/ZIKV-history mean value:",ALL_df$ymean_Peak[which(ALL_df$organism=="r11026")],"\n")
-
-ttPeak_plot # 300 x 350
-cat("ttPeak:\n");cat("       Naive vs. ZIKV-history p-value:",ttPeak_ttestN1$p.value,"\n");cat("Naive vs. DENV-2/ZIKV-history p-value:",ttPeak_ttestN2$p.value,"\n");cat(" ZIKV vs. DENV-2/ZIKV-history p-value:",ttPeak_ttest12$p.value,"\n");cat("                     Naive mean value:",ALL_df$ymean_ttPeak[which(ALL_df$organism=="rh3019")],"\n");cat("              ZIKV-history mean value:",ALL_df$ymean_ttPeak[which(ALL_df$organism=="rh2799")],"\n");cat("       DENV-2/ZIKV-history mean value:",ALL_df$ymean_ttPeak[which(ALL_df$organism=="r11026")],"\n")
-
-dur_plot # 300 x 350
-cat("Dur:\n");cat("       Naive vs. ZIKV-history p-value:",dur_ttestN1$p.value,"\n");cat("Naive vs. DENV-2/ZIKV-history p-value:",dur_ttestN2$p.value,"\n");cat(" ZIKV vs. DENV-2/ZIKV-history p-value:",dur_ttest12$p.value,"\n");cat("                     Naive mean value:",ALL_df$ymean_dur[which(ALL_df$organism=="rh3019")],"\n");cat("              ZIKV-history mean value:",ALL_df$ymean_dur[which(ALL_df$organism=="rh2799")],"\n");cat("       DENV-2/ZIKV-history mean value:",ALL_df$ymean_dur[which(ALL_df$organism=="r11026")],"\n")
-
-# all
-grid.arrange(AUC_plot, dur_plot, Peak_plot, ttPeak_plot, ncol = 4, nrow = 1)  # 1200 x 350
-grid.arrange(AUC_plot, dur_plot, Peak_plot, ttPeak_plot, ncol = 2, nrow = 2)  # 700 x 700
-cat("AUC:\n");cat("       Naive vs. ZIKV-history p-value:",AUC_ttestN1$p.value,"\n");cat("Naive vs. DENV-2/ZIKV-history p-value:",AUC_ttestN2$p.value,"\n");cat(" ZIKV vs. DENV-2/ZIKV-history p-value:",AUC_ttest12$p.value,"\n");cat("                     Naive mean value:",ALL_df$ymean_AUC[which(ALL_df$organism=="rh3019")],"\n");cat("              ZIKV-history mean value:",ALL_df$ymean_AUC[which(ALL_df$organism=="rh2799")],"\n");cat("       DENV-2/ZIKV-history mean value:",ALL_df$ymean_AUC[which(ALL_df$organism=="r11026")],"\n");cat("\nPeak:\n");cat("       Naive vs. ZIKV-history p-value:",ALL_ttest.df_Peak_N1$p.value,"\n");cat("Naive vs. DENV-2/ZIKV-history p-value:",ALL_ttest.df_Peak_N2$p.value,"\n");cat(" ZIKV vs. DENV-2/ZIKV-history p-value:",ALL_ttest.df_Peak_12$p.value,"\n");cat("                     Naive mean value:",ALL_df$ymean_Peak[which(ALL_df$organism=="rh3019")],"\n");cat("              ZIKV-history mean value:",ALL_df$ymean_Peak[which(ALL_df$organism=="rh2799")],"\n");cat("       DENV-2/ZIKV-history mean value:",ALL_df$ymean_Peak[which(ALL_df$organism=="r11026")],"\n");cat("\nttPeak:\n");cat("       Naive vs. ZIKV-history p-value:",ttPeak_ttestN1$p.value,"\n");cat("Naive vs. DENV-2/ZIKV-history p-value:",ttPeak_ttestN2$p.value,"\n");cat(" ZIKV vs. DENV-2/ZIKV-history p-value:",ttPeak_ttest12$p.value,"\n");cat("                     Naive mean value:",ALL_df$ymean_ttPeak[which(ALL_df$organism=="rh3019")],"\n");cat("              ZIKV-history mean value:",ALL_df$ymean_ttPeak[which(ALL_df$organism=="rh2799")],"\n");cat("       DENV-2/ZIKV-history mean value:",ALL_df$ymean_ttPeak[which(ALL_df$organism=="r11026")],"\n");cat("\nDur:\n");cat("       Naive vs. ZIKV-history p-value:",dur_ttestN1$p.value,"\n");cat("Naive vs. DENV-2/ZIKV-history p-value:",dur_ttestN2$p.value,"\n");cat(" ZIKV vs. DENV-2/ZIKV-history p-value:",dur_ttest12$p.value,"\n");cat("                     Naive mean value:",ALL_df$ymean_dur[which(ALL_df$organism=="rh3019")],"\n");cat("              ZIKV-history mean value:",ALL_df$ymean_dur[which(ALL_df$organism=="rh2799")],"\n");cat("       DENV-2/ZIKV-history mean value:",ALL_df$ymean_dur[which(ALL_df$organism=="r11026")],"\n")
+duration_plot <- statplot(ALL_stats$duration, ALL_summary_stats$mean_duration, expression(paste("Duration of detectable viremia (days)")), y_position2, ylim2)
+save_duration_plot <- png_statplot("duration", duration_plot)
 
 
+#### Save t-test p-values ####
+
+# append each of the stats to the empty p-value data frame
+stat_pvalues <- ttest(ALL_stats$log_auc, stat_pvalues, "auc")
+stat_pvalues <- ttest(ALL_stats$log_peak, stat_pvalues, "peak")
+stat_pvalues <- ttest(ALL_stats$ttpeak, stat_pvalues, "ttpeak")
+stat_pvalues <- ttest(ALL_stats$duration, stat_pvalues, "duration")
+
+# write out csv with the p-value data
+
+write.csv(stat_pvalues, paste(cleanVLcsv, paste(virus,"VL-stat-significance.csv", sep = "-"), sep = ""), row.names = FALSE)
