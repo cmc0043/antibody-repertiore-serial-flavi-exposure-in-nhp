@@ -74,7 +74,9 @@ if(!require(data.table)){
 
 #### Set parameters & Import data ####
 
-## THIS IS THE ONLY SECTION WHERE PARAMETERS NEED TO BE CHANGED IN ORDER FOR CODE TO RUN PROPERLY
+## GOAL: THIS IS THE ONLY SECTION WHERE PARAMETERS NEED TO BE CHANGED IN ORDER FOR CODE TO RUN PROPERLY
+## REALITY: If 3 cohorts are imported, but only 1 or 2 have VLs for a given virus, then things in the stats section need to be changed
+# Items that need to be changed later in the code are marked with "changethis" so that they can be IDed with command+F
 
 # set WD to folder where raw VL data is stored
 setwd("~/research/chelsea_crooks/projects/zikv_denv_interactions/antibody-repertiore-serial-flavi-exposure-in-nhp/data_raw/viral-loads")
@@ -95,8 +97,8 @@ dpimax <- as.numeric(15)
 
 # if different axes are preferred for plots as compared to stats analysis they can be modified here
 # default is to have the same values as the parameters above
-plotdpimin <- dpimin # as.numeric()
-plotdpimax <- dpimax # as.numeric()
+plotdpimin <- dpimin # as.numeric() or dpimin
+plotdpimax <- dpimax # as.numeric() or dpimax
 
 # sample source for viral loads
 samplesource = "Plasma"
@@ -200,19 +202,6 @@ addDPI <- function(b){
   return(list_C1[[n]]) 
   }
 
-## function to remove any data points that are outside the defined dpi min and max range
-# dpi min and max defined in the 'set parameters' section
-# input is a list of sequential integers, with one integer for each animal in the group
-DPIcutoffs <- function(c){
-  for (i in c){
-    n = i
-    #list_C1[[n]]$dpi <- as.numeric(list_C1[[n]]$dpi)
-    list_C1[[n]] <- filter(list_C1[[n]], list_C1[[n]]$dpi >= dpimin)
-    list_C1[[n]] <- filter(list_C1[[n]], list_C1[[n]]$dpi <= dpimax)
-  }
-  return(list_C1[[n]])
-}
-
 ## modify the data so that it is able to be plotted on a log scale
 # takes a dataframe of all of the cleaned viral load data for the cohort
 logtransform <- function(d){
@@ -237,10 +226,10 @@ viremiaplot <- function(e){
       breaks = c(2, 3, 4, 5, 6, 7, 8),
       labels = c(2, 3, 4, 5, 6, 7, 8),
       expand = c(0, 0)) + 
-    scale_x_continuous(
-      breaks = plotdpimin:plotdpimax, 
-      labels = plotdpimin:plotdpimax,
-      expand = c(0, 0)) + 
+    #scale_x_continuous(
+      #breaks = plotdpimin:plotdpimax, 
+      #labels = plotdpimin:plotdpimax,
+      #expand = c(0, 0)) + 
     coord_cartesian(
       ylim = c(2, 8),
       xlim = c((plotdpimin - 1),(plotdpimax + 1))) + 
@@ -298,6 +287,8 @@ for (i in cohort_number){
   raw_data_C1 <- VLdataclean(raw_data_C1)
 
   ## Create df with cohort animals
+  raw_data_C1$animal <- as.character(raw_data_C1$animal)
+  raw_data_C1$animal <- as.factor(raw_data_C1$animal)
   C1 <- unique(raw_data_C1[c("animal")])
 
   ## Create list with each animal in the group
@@ -312,30 +303,34 @@ for (i in cohort_number){
   # if/else 1 - make sure that there is some VL data for the cohort, else return "no VL data"
   # if/else 2 - if there is some VL, make sure that there are more than 2 data points, else return "insufficient VL data"
   if (length(C1$animal) > 0){
-  for (i in length_list_C1){
+  for (i in length_list_C1){ 
     n = i
     length_C1_dates <- length(list_C1[[n]]$date)
     if (length_C1_dates > 2){
     list_C1[[n]] <- addDPI(length_C1_dates) 
+    list_C1[[n]] <- filter(list_C1[[n]], list_C1[[n]]$dpi >= dpimin) # remove data points outside the defined min (eliminates pre-infection VLs and VLs from previous studies)
+    list_C1[[n]] <- filter(list_C1[[n]], list_C1[[n]]$dpi <= dpimax) # remove data points outside the defined min (eliminates VLs from future studies)
     } else {
-      insufficient_VL <- "Insufficient VL data for this cohort"
-      write.csv(insufficient_VL, paste(cleanVLcsv, paste(paste("C", cohort_number[[x]], sep=''), virus, "VL-clean.csv", sep = "-"), sep = ''), row.names = FALSE)
+      list_C1[[n]]$date <- NULL
+      list_C1[[n]]$assay <- NULL
+      list_C1[[n]]$amount <- NULL
+      #insufficient_VL <- "Insufficient VL data for this cohort"
+      #write.csv(insufficient_VL, paste(cleanVLcsv, paste(paste("C", cohort_number[[x]], sep=''), virus, "VL-clean.csv", sep = "-"), sep = ''), row.names = FALSE)
       }
     }
-    # for loop to remove any DPIs outside the specified min max range
-    list_C1[[n]] <- DPIcutoffs(length_list_C1)
-  
+  }
     ## one big, happy df & export to clean folder
     df_C1 <- bind_rows(list_C1)
+    if (ncol(df_C1) > 1){
     write.csv(df_C1, paste(cleanVLcsv, paste(paste("C", cohort_number[[x]], sep=''), virus, "VL-clean.csv", sep = "-"), sep = ''), row.names = FALSE)
     } else {
-      no_VL <- "No VL data for this cohort"
-      write.csv(no_VL, paste(cleanVLcsv, paste(paste("C", cohort_number[[x]], sep=''), virus, "VL-clean.csv", sep = "-"), sep = ''), row.names = FALSE)
+      no_VL <- "No or insufficent VL data for this cohort"
+      write.csv(no_VL, paste(cleanVLcsv, paste(paste("C", cohort_number[[x]], sep=''), "no", virus, "VL-clean.csv", sep = "-"), sep = ''), row.names = FALSE)
       }
   
   #### Plot viremia data ####
   
- if (length(C1$animal) > 0){ # check to make sure there is 
+ if (ncol(df_C1) > 1){ # check to make sure there is 
     ## change 0s to 0.001 and log transform
     df_C1 <- logtransform(df_C1)
     
@@ -344,9 +339,6 @@ for (i in cohort_number){
     
     ## Plot
     Plot_C1 <- viremiaplot(df_C1)
-    
-    # visualize plot in R studio
-    Plot_C1
     
     # write out figure to png
     png_VLplot(Plot_C1)
@@ -366,6 +358,10 @@ setwd(cleanVLcsv)
 virusfiletype <- paste("*", virus, "VL-clean.csv", sep="-")
 cleanVLcsvs = list.files(pattern=virusfiletype)
 cleanVLdata = lapply(cleanVLcsvs, read.delim, sep=",")
+
+cleanVLdata <- Filter(function(x) {nrow(x) >= 2}, cleanVLdata) # import only data files that have more than two rows
+lencleanVL <- length(cleanVLdata)
+stats_cohorts <- (1:lencleanVL)
 
 ## write function to eliminate rows that have a VL < 100
 lod_cutoff <- function(x){
@@ -390,13 +386,13 @@ statplot <- function(g, j, k, l, m){
     geom_point(position = position_jitter(w = 0.05, h = 0)) + 
     geom_errorbar(data = ALL_summary_stats, aes(x = group, ymax = j, ymin = j),
                   size = 0.5, inherit.aes = F, width = 0.2) + 
-    geom_signif(comparisons =  cohort_comparisons, 
+    geom_signif(comparisons =  cohort_comparisons, # changethis if there is only one cohort
                 test='t.test', map_signif_level = c("***"=0.001, "**"=0.01, "*"=0.05, "NS"=2),
                 y_position = l, tip_length = 0) + 
     coord_cartesian(ylim = m) +
     scale_x_discrete(
       breaks = unique(ALL_stats$group), 
-      labels = cohortnames) +
+      labels = cohortnames) + # changethis for variable number of cohorts (can use cohortnames)
     scale_color_manual(
       values = anihex,
       breaks = c(animal_study_data$animal)) + 
@@ -436,9 +432,9 @@ png_statplot <- function(o, p){
 }
 
 # create empty data frame for p-values values
-stat_pvalues <- data.frame(matrix(ncol = 0, nrow = 3))
+stat_pvalues <- data.frame(matrix(ncol = 0, nrow = lencleanVL))
 stat_pvalues <- stat_pvalues%>%
-  add_column(comparisons = c("C1/C2", "C1/C3", "C2/C3"))
+  add_column(comparisons = c("C1/C2","C1/C3","C2/C3"))#"C1/C2", "C1/C3", "C2/C3")) # changethis for variable number of cohorts
 
 ## T-test
 # q - column in the ALL_stats dataframe (ALL_stats$log_auc, ALL_stats$log_peak, ALL_stats$ttpeak, ALL_stats$duration)
@@ -450,17 +446,17 @@ ttest <- function(q, aa, bb){
   
   ttest_C1 <- filter(ALL_ttest, ALL_stats.group=="C1")
   ttest_C2 <- filter(ALL_ttest, ALL_stats.group=="C2")
-  ttest_C3 <- filter(ALL_ttest, ALL_stats.group=="C3")
+  ttest_C3 <- filter(ALL_ttest, ALL_stats.group=="C3") # changethis for variable number of cohorts
   
   # the all-mighty p-value
   ttest12 <- t.test(ttest_C1[2], ttest_C2[2])
-  ttest13 <- t.test(ttest_C1[2], ttest_C3[2])
-  ttest23 <- t.test(ttest_C2[2], ttest_C3[2])
+  ttest13 <- t.test(ttest_C1[2], ttest_C3[2]) # changethis for variable number of cohorts
+  ttest23 <- t.test(ttest_C2[2], ttest_C3[2]) # changethis for variable number of cohorts
   
   # add p-value to dataframe
   #assign("bb", auc)
   
-  temp <- c(ttest12$p.value, ttest13$p.value, ttest23$p.value)
+  temp <- c(ttest12$p.value, ttest13$p.value, ttest23$p.value) # changethis for variable number of cohorts
   
   aa <- aa%>%
     add_column(temp)%>%
@@ -476,13 +472,14 @@ auc_summary <- data.frame(matrix(ncol = 2, nrow = 0))
 u <- c("group", "mean_auc")
 colnames(auc_summary) <- u
 
-for (i in cohort_number){
+for (i in stats_cohorts){
   x=i
   clean_data_C1 <- as.data.frame(cleanVLdata[[x]])
   list_C1 <- split(clean_data_C1,clean_data_C1$animal)
   C1 <- unique(clean_data_C1[c("animal")])
   
-  # list_C1 contains df for each animal in the naive cohort    
+  # list_C1 contains df for each animal in the cohort 
+  # C1_truncate_100 contains all VLs > 100 copies/ml (the LOD of the assay)
   C1_truncate_100 <- map(list_C1,
                       ~lod_cutoff(.))
 
@@ -527,24 +524,23 @@ peak_summary <- data.frame(matrix(ncol = 2, nrow = 0))
 t <- c("group", "mean_peak")
 colnames(peak_summary) <- t
 
-for (i in cohort_number){
+for (i in stats_cohorts){
   x=i
   clean_data_C1 <- as.data.frame(cleanVLdata[[x]])
   list_C1 <- split(clean_data_C1,clean_data_C1$animal)
   C1 <- unique(clean_data_C1[c("animal")])
-  # list_C1 contains df for each animal in the naive cohort    
-  
-  # create empty data frame for AUC values
+
+  # create empty data frame for peak values
   peak_C1 <- data.frame(matrix(ncol = 2, nrow = 0))
   newdf <- c("index", "peak")
   colnames(peak_C1) <- newdf
   
-  #calculate AUC for each animal and output to empty dataframe aunderc_C1
-  for (i in seq_along(list_C1)){
-    peak_C1[nrow(peak_C1)+1,] = c(i, max(list_C1[[i]]$amount))
+  #calculate peak for each animal and output to empty dataframe peak_C1
+  for (y in seq_along(list_C1)){
+    peak_C1[nrow(peak_C1)+1,] = c(y, max(list_C1[[y]]$amount))
   }
   
-  # replace the index with the animal names from data frame C3, add column with log transformed data
+  # replace the index with the animal names from data frame C1, add column with log transformed data
   peak_C1 <- peak_C1 %>%
     add_column(C1,
                .after = "index")%>%
@@ -554,7 +550,7 @@ for (i in cohort_number){
   
   peak_C1 <- peak_C1[-c(1)]
   
-  # save the output to the auc list
+  # save the output to the peak list
   peak[[x]] <- peak_C1
   
   # add mean of the cohort's peak to summary data frame
@@ -573,23 +569,23 @@ ttpeak_summary <- data.frame(matrix(ncol = 2, nrow = 0))
 s <- c("group", "mean_ttpeak")
 colnames(ttpeak_summary) <- s
 
-for (i in cohort_number){
+for (i in stats_cohorts){
   x=i
   clean_data_C1 <- as.data.frame(cleanVLdata[[x]])
   list_C1 <- split(clean_data_C1,clean_data_C1$animal)
   C1 <- unique(clean_data_C1[c("animal")])
 
-  # create empty data frame for AUC values
+  # create empty data frame for ttpeak values
   ttpeak_C1 <- data.frame(matrix(ncol = 2, nrow = 0))
   newdf <- c("index", "ttpeak")
   colnames(ttpeak_C1) <- newdf
   
-  #calculate AUC for each animal and output to empty dataframe aunderc_C1
-  for (i in seq_along(list_C1)){
-    ttpeak_C1[nrow(ttpeak_C1)+1,] = c(i, list_C1[[i]]$dpi[which.max(list_C1[[i]]$amount)])
+  #calculate AUC for each animal and output to empty dataframe ttpeak_C1
+  for (y in seq_along(list_C1)){
+    ttpeak_C1[nrow(ttpeak_C1)+1,] = c(y, list_C1[[y]]$dpi[which.max(list_C1[[y]]$amount)])
   }
   
-  # replace the index with the animal names from data frame C3, add column with log transformed data
+  # replace the index with the animal names from data frame C1, add column with log transformed data
   ttpeak_C1 <- ttpeak_C1 %>%
     add_column(C1,
                .after = "index")%>%
@@ -598,7 +594,7 @@ for (i in cohort_number){
   
   ttpeak_C1 <- ttpeak_C1[-c(1)] 
   
-  # save the output to the auc list
+  # save the output to the ttpeak list
   ttpeak[[x]] <- ttpeak_C1
   
   # add mean of the cohort's ttpeak to summary data frame
@@ -617,13 +613,14 @@ duration_summary <- data.frame(matrix(ncol = 2, nrow = 0))
 r <- c("group", "mean_duration")
 colnames(duration_summary) <- r
 
-for (i in cohort_number){
+for (i in stats_cohorts){
   x=i
   clean_data_C1 <- as.data.frame(cleanVLdata[[x]])
   list_C1 <- split(clean_data_C1,clean_data_C1$animal)
   C1 <- unique(clean_data_C1[c("animal")])
   
-  # list_C1 contains df for each animal in the naive cohort    
+  # list_C1 contains df for each animal in the cohort 
+  # C1_truncate_100 contains all VLs > 100 copies/ml (the LOD of the assay)    
   C1_truncate_100 <- map(list_C1,
                          ~lod_cutoff(.))
   
@@ -633,8 +630,8 @@ for (i in cohort_number){
   colnames(duration_C1) <- newdf
   
   #calculate duration for each animal and output to empty dataframe duration_C1
-  for (w in seq_along(C1_truncate_100)){
-    duration_C1[nrow(duration_C1)+1,] = c(w, length(C1_truncate_100[[w]]$dpi[which(C1_truncate_100[[w]]$amount > 100)]))
+  for (y in seq_along(C1_truncate_100)){
+    duration_C1[nrow(duration_C1)+1,] = c(y, ((max(C1_truncate_100[[y]]$dpi)+1)-(min(C1_truncate_100[[y]]$dpi))))
   }
   
   # replace the index with the animal names from data frame C1, add column with log transformed data
@@ -646,7 +643,7 @@ for (i in cohort_number){
   
   duration_C1 <- duration_C1[-c(1)]
   
-  # save the output to the auc list
+  # save the output to the duration list
   duration[[x]] <- duration_C1
   
   # add mean of the cohort's duration to summary data frame
@@ -665,10 +662,10 @@ ALL_summary_stats <- bind_cols(auc_summary,
                                duration_summary[2])
 
 # combine all of the stats dataframes together
-aunderc_all <- bind_rows(aunderc[1:number_of_cohorts])
-peak_all <- bind_rows(peak[1:number_of_cohorts])
-ttpeak_all <- bind_rows(ttpeak[1:number_of_cohorts])
-duration_all <- bind_rows(duration[1:number_of_cohorts])
+aunderc_all <- bind_rows(aunderc[1:lencleanVL])
+peak_all <- bind_rows(peak[1:lencleanVL])
+ttpeak_all <- bind_rows(ttpeak[1:lencleanVL])
+duration_all <- bind_rows(duration[1:lencleanVL])
 
 ALL_stats <- bind_cols(aunderc_all, peak_all[3:4], ttpeak_all[3], duration_all[3])
 
@@ -680,7 +677,7 @@ write.csv(ALL_summary_stats, paste(virus, "viremia-stats-summary.csv", sep="-"),
 # values for each animal
 write.csv(ALL_stats, paste(virus, "viremia-stats-all.csv", sep="-"), row.names = FALSE)
 
-# create CSV for copy paste into the master spreadsheet
+# create CSV for direct copy paste into the master google sheet
 master_stats <- ALL_stats[-c(2,4,6)]
 write.csv(master_stats, paste(virus, "master-viremia-stats-all.csv", sep="-"), row.names = FALSE)
 
@@ -697,18 +694,17 @@ write.csv(master_stats, paste(virus, "master-viremia-stats-all.csv", sep="-"), r
 # l - y position of the significance bars, options defined above (y_position1, y_position2)
 # m - y axis limits, options defined above (ylim1, ylim2)
 
-auc_plot <- statplot(ALL_stats$log_auc, ALL_summary_stats$mean_auc, expression(paste("Area Under the Curve (log"[10],")")), y_position1, ylim1)
+auc_plot <- statplot(ALL_stats$log_auc, ALL_summary_stats$mean_auc, expression(paste("Area Under the Curve (log"[10],")")), y_position1, ylim1) #changethis to edit plot axes
 save_auc_plot <- png_statplot("AUC", auc_plot)
 
-peak_plot <- statplot(ALL_stats$log_peak, ALL_summary_stats$mean_peak, expression(paste("Peak viremia (log"[10],")")), y_position1, ylim1)
+peak_plot <- statplot(ALL_stats$log_peak, ALL_summary_stats$mean_peak, expression(paste("Peak viremia (log"[10],")")), y_position1, ylim1) #changethis to edit plot axes
 save_peak_plot <- png_statplot("peak", peak_plot)
 
-ttpeak_plot <- statplot(ALL_stats$ttpeak, ALL_summary_stats$mean_ttpeak, expression(paste("Time to peak viremia (days)")), y_position2, ylim2)
+ttpeak_plot <- statplot(ALL_stats$ttpeak, ALL_summary_stats$mean_ttpeak, expression(paste("Time to peak viremia (days)")), y_position2, ylim2) #changethis to edit plot axes
 save_ttpeak_plot <- png_statplot("ttpeak", ttpeak_plot)
 
-duration_plot <- statplot(ALL_stats$duration, ALL_summary_stats$mean_duration, expression(paste("Duration of detectable viremia (days)")), y_position2, ylim2)
+duration_plot <- statplot(ALL_stats$duration, ALL_summary_stats$mean_duration, expression(paste("Duration of detectable viremia (days)")), y_position2, ylim2) #changethis to edit plot axes
 save_duration_plot <- png_statplot("duration", duration_plot)
-
 
 #### Save t-test p-values ####
 
